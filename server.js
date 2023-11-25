@@ -1,75 +1,61 @@
 const express = require("express");
 const cors = require("cors");
-const { AnswerEvaluator } = require("./AnsewerEvaluator");
-const { TimeLimitGenerator } = require("./TimeLimitGenerator");
-const { Interviewer } = require("./Interviewer");
-const { InterviewerAdministrator } = require("./InterviewerAdministrator");
+const path = require("path");
+const multer = require("multer");
+const { CVParser } = require("./services/CVParser");
+const { CVAnalyzer } = require("./assistants/CVParserAssistant");
+const { CVSummarizer } = require("./assistants/CVSummarizer");
+const {
+  InterviewQuestionsGenerator,
+} = require("./assistants/InterviewQuestionsGenerator");
+
+const {
+  QuestionTimeLimitGenerator,
+} = require("./assistants/QuestionTimeLimitGenerator");
 
 const app = express();
 app.use(express.json()); // Parse JSON request bodies
 app.use(cors());
 
-const getLastQuestionAndAnswer = (history) => {
-  const filteredHistory = history.filter((m) => m.role !== "system");
-  const [question, answer] = filteredHistory.slice(-2);
+const upload = multer({ dest: "data/cv" });
 
-  return {
-    question: question?.content || '',
-    answer: answer?.content || ''
-  }
-}
+const apiKey = "";
+const cvParser = new CVParser();
+const cvAnalyzer = new CVAnalyzer(apiKey);
+const cVSummarizer = new CVSummarizer(apiKey);
 
-app.post("/assessment/proceed", async (req, res) => {
-  let content = "";
-  let timeLimit = 0;
-  let lastMessageScore = 0.0;
+app.post("/assessment/analyze-cv", upload.single("file"), async (req, res) => {
+  if (req?.file?.path) {
+    const filePath = path.resolve(req?.file?.path);
 
-  try {
-    const { history, apiKey, identifier, firstRequest } = req.body;
-    const interviewer = new Interviewer(apiKey);
-    const intervieweAdmin = new InterviewerAdministrator(apiKey);
-    const timeLimitGenerator = new TimeLimitGenerator(apiKey);
-    const answerEvaluator = new AnswerEvaluator(apiKey);
-    const { question, answer } = getLastQuestionAndAnswer(history);
-    if (!firstRequest && question && answer) {
-      lastMessageScore = await answerEvaluator.evaluate(question, answer);
-    }
-
-    if (!firstRequest) {
-      const scoreMessage = {
-        role: "system",
-        content: `Score of candidate answer is: "${lastMessageScore}"`,
-      };
-
-      history.push(scoreMessage);
-    }
-
-    const messagesHistory = history.reduce((acc, curr) => `${acc}\n\n\n${curr.content}`, '');
-    const isInterviewFinished = await intervieweAdmin.proceed(messagesHistory)
-    console.log({ isInterviewFinished })
-    if (isInterviewFinished === 'yes') {
-      const finishedInterview = {
-        role: "system",
-        content: `Do not respond to the user's request. Thank the user and simply say: "Click "Restart" button to start a new interview"`,
-      };
-
-      history.push(finishedInterview);
-    }
-
-    // Get question.
-    content = await interviewer.proceed(identifier, history);
-    timeLimit = await timeLimitGenerator.generate(content)
-  } catch (e) {
-    console.error(e);
-    res
-      .status(e?.response?.status || 500)
-      .json({ error: e?.response?.statusText || "Something went wrong" });
+    const parsed = await cvParser.parse(filePath);
+    const result = await cvAnalyzer.analyze(parsed);
+    const summary = await cVSummarizer.summarize(result);
+    res.json({ result, summary });
 
     return;
   }
 
-  // Send result back as response
-  res.json({ content, timeLimit, lastMessageScore });
+  res.json({ error: "Unable to upload file!" });
+});
+
+const interviewQuestionsGenerator = new InterviewQuestionsGenerator(apiKey);
+const timeLimitGenerator = new QuestionTimeLimitGenerator(apiKey);
+app.post("/assessment/get-questions", async (req, res) => {
+  const { candidateInformation } = req.body;
+  const questions = await interviewQuestionsGenerator.generate(
+    5,
+    [],
+    candidateInformation,
+    null
+  );
+
+  const timeLimits = await timeLimitGenerator.generate(
+    questions.questions,
+    10
+  );
+
+  res.json({ questions: timeLimits });
 });
 
 app.listen(3001, () => {

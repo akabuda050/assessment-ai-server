@@ -106,7 +106,7 @@ class AnswerEvaluator {
     if (match !== null) {
       return match[1];
     } else {
-      return `Unable to evalute\n\n\n${response.data.choices[0].text}`;
+      return `N/A`;
     }
   }
 }
